@@ -31,7 +31,6 @@ class CuboidSSTPLModule(pl.LightningModule):
     """PyTorch Lightning module for SST forecasting."""
 
     def __init__(self,
-                 total_num_steps: int,
                  oc_file: str = None,
                  save_dir: str = None):
         super().__init__()
@@ -40,17 +39,24 @@ class CuboidSSTPLModule(pl.LightningModule):
         else:
             oc_from_file = None
         oc = self.get_base_config(oc_from_file=oc_from_file)
-        model_cfg = OmegaConf.to_object(oc.model)
         
-        # This part for setting up the model architecture remains largely the same
+        # --- ROBUST FIX for AssertionError ---
+        # Manually update the configuration dictionary with the correct cropped dimensions
+        # before the model is created. This guarantees the model expects the correct shape.
+        oc.model.input_shape[1] = 21  # H dimension
+        oc.model.input_shape[2] = 28  # W dimension
+        oc.model.target_shape[1] = 21  # H dimension
+        oc.model.target_shape[2] = 28  # W dimension
+        # --- END OF FIX ---
+        
+        model_cfg = OmegaConf.to_object(oc.model)
+
         num_blocks = len(model_cfg["enc_depth"])
         enc_attn_patterns = [model_cfg["self_pattern"]] * num_blocks
         dec_self_attn_patterns = [model_cfg["cross_self_pattern"]] * num_blocks
         dec_cross_attn_patterns = [model_cfg["cross_pattern"]] * num_blocks
 
         self.torch_nn_module = CuboidTransformerModel(
-            # --- CORRECTION ---
-            # Casting shapes to tuples for robustness
             input_shape=tuple(model_cfg["input_shape"]),
             target_shape=tuple(model_cfg["target_shape"]),
             base_units=model_cfg["base_units"],
@@ -78,16 +84,8 @@ class CuboidSSTPLModule(pl.LightningModule):
             checkpoint_level=model_cfg["checkpoint_level"],
         )
 
-        self.total_num_steps = total_num_steps
         self.save_hyperparameters(oc)
         self.oc = oc
-        
-        # These layout parameters are not strictly necessary if using the config,
-        # but are kept for consistency with the original repo's structure.
-        layout_cfg = self.get_layout_config()
-        self.in_len = layout_cfg.in_len
-        self.out_len = layout_cfg.out_len
-        
         self.save_dir = save_dir
 
         self.valid_mse = torchmetrics.MeanSquaredError()
@@ -123,6 +121,8 @@ class CuboidSSTPLModule(pl.LightningModule):
         cfg = OmegaConf.create()
         cfg.in_len = 12
         cfg.out_len = 12
+        # This function's values will be overridden by the fix in __init__,
+        # but we leave the original values here as a base.
         cfg.img_height = 720
         cfg.img_width = 1440
         return cfg
@@ -203,10 +203,19 @@ class CuboidSSTPLModule(pl.LightningModule):
         cfg = OmegaConf.create()
         cfg.check_val_every_n_epoch = 1
         cfg.log_step_ratio = 0.01
-        cfg.precision = 16
+        cfg.precision = "16-mixed"
         return cfg
 
     def configure_optimizers(self):
+        total_batch_size = self.oc.optim.total_batch_size
+        max_epochs = self.oc.optim.max_epochs
+        num_train_samples = len(self.trainer.datamodule.sst_train)
+        
+        total_num_steps = (num_train_samples // total_batch_size) * max_epochs
+        total_num_steps = max(total_num_steps, 1)
+        
+        warmup_iter = int(np.round(self.oc.optim.warmup_percentage * total_num_steps))
+
         decay_parameters = get_parameter_names(self.torch_nn_module, [nn.LayerNorm])
         decay_parameters = [name for name in decay_parameters if "bias" not in name]
         optimizer_grouped_parameters = [
@@ -216,10 +225,15 @@ class CuboidSSTPLModule(pl.LightningModule):
              'weight_decay': 0.0}
         ]
         optimizer = torch.optim.AdamW(params=optimizer_grouped_parameters, lr=self.oc.optim.lr, weight_decay=self.oc.optim.wd)
-        warmup_iter = int(np.round(self.oc.optim.warmup_percentage * self.total_num_steps))
-        warmup_scheduler = LambdaLR(optimizer, lr_lambda=warmup_lambda(warmup_steps=warmup_iter, min_lr_ratio=self.oc.optim.warmup_min_lr_ratio))
-        cosine_scheduler = CosineAnnealingLR(optimizer, T_max=(self.total_num_steps - warmup_iter), eta_min=self.oc.optim.min_lr_ratio * self.oc.optim.lr)
-        lr_scheduler = SequentialLR(optimizer, schedulers=[warmup_scheduler, cosine_scheduler], milestones=[warmup_iter])
+        
+        if warmup_iter > 0:
+            warmup_scheduler = LambdaLR(optimizer, lr_lambda=warmup_lambda(warmup_steps=warmup_iter, min_lr_ratio=self.oc.optim.warmup_min_lr_ratio))
+            cosine_scheduler = CosineAnnealingLR(optimizer, T_max=(total_num_steps - warmup_iter), eta_min=self.oc.optim.min_lr_ratio * self.oc.optim.lr)
+            lr_scheduler = SequentialLR(optimizer, schedulers=[warmup_scheduler, cosine_scheduler], milestones=[warmup_iter])
+        else:
+            cosine_scheduler = CosineAnnealingLR(optimizer, T_max=total_num_steps, eta_min=self.oc.optim.min_lr_ratio * self.oc.optim.lr)
+            lr_scheduler = cosine_scheduler
+
         lr_scheduler_config = {'scheduler': lr_scheduler, 'interval': 'step', 'frequency': 1}
         return {'optimizer': optimizer, 'lr_scheduler': lr_scheduler_config}
 
@@ -232,25 +246,19 @@ class CuboidSSTPLModule(pl.LightningModule):
             save_last=True,
             mode="min",
         )
-        # --- CORRECTION 1 ---
-        # Changed `kwargs.pop("callbacks",)` to `kwargs.pop("callbacks", [])`
-        # to ensure `callbacks` is initialized as a list, preventing a crash.
         callbacks = kwargs.pop("callbacks", [])
         callbacks.append(checkpoint_callback)
         
-        # --- CORRECTION 2 ---
-        # Completed the incomplete statement to add the LearningRateMonitor callback.
         if self.oc.logging.monitor_lr:
             callbacks.append(LearningRateMonitor(logging_interval='step'))
         
-        log_every_n_steps = max(1, int(self.oc.trainer.log_step_ratio * self.total_num_steps))
+        log_every_n_steps = kwargs.pop("log_every_n_steps", 50)
         
         ret = dict(
             callbacks=callbacks,
             log_every_n_steps=log_every_n_steps,
             default_root_dir=self.save_dir,
             accelerator="gpu",
-            strategy=ApexDDPStrategy(find_unused_parameters=False, delay_allreduce=True),
             max_epochs=self.oc.optim.max_epochs,
             check_val_every_n_epoch=self.oc.trainer.check_val_every_n_epoch,
             gradient_clip_val=self.oc.optim.gradient_clip_val,
@@ -260,11 +268,9 @@ class CuboidSSTPLModule(pl.LightningModule):
         return ret
 
     def forward(self, batch):
-        x, y = batch # x, y have shape (N, T, C, H, W)
-        # Permute to (N, T, H, W, C) for the model
+        x, y = batch
         x = x.permute(0, 1, 3, 4, 2)
         y = y.permute(0, 1, 3, 4, 2)
-        
         pred_y = self.torch_nn_module(x)
         loss = F.mse_loss(pred_y, y)
         return pred_y, loss, x, y
@@ -276,12 +282,12 @@ class CuboidSSTPLModule(pl.LightningModule):
 
     def validation_step(self, batch, batch_idx):
         pred_seq, _, _, target_seq = self(batch)
-        if self.trainer.precision == 16:
+        if self.trainer.precision == "16-mixed":
             pred_seq = pred_seq.float()
         self.valid_mse(pred_seq, target_seq)
         self.valid_mae(pred_seq, target_seq)
 
-    def validation_epoch_end(self, outputs):
+    def on_validation_epoch_end(self):
         valid_mse = self.valid_mse.compute()
         valid_mae = self.valid_mae.compute()
         self.log('valid_mse_epoch', valid_mse, prog_bar=True, on_step=False, on_epoch=True)
@@ -291,12 +297,12 @@ class CuboidSSTPLModule(pl.LightningModule):
 
     def test_step(self, batch, batch_idx):
         pred_seq, _, _, target_seq = self(batch)
-        if self.trainer.precision == 16:
+        if self.trainer.precision == "16-mixed":
             pred_seq = pred_seq.float()
         self.test_mse(pred_seq, target_seq)
         self.test_mae(pred_seq, target_seq)
 
-    def test_epoch_end(self, outputs):
+    def on_test_epoch_end(self):
         test_mse = self.test_mse.compute()
         test_mae = self.test_mae.compute()
         self.log('test_mse_epoch', test_mse, prog_bar=True, on_step=False, on_epoch=True)
@@ -318,48 +324,27 @@ def main():
     args = parser.parse_args()
 
     if args.cfg:
-      oc_from_file = OmegaConf.load(open(args.cfg, "r"))
-
-      # Convert to dict
-      dataset_cfg = OmegaConf.to_object(oc_from_file.dataset)
-      optim_cfg = OmegaConf.to_object(oc_from_file.optim)
-      model_cfg = OmegaConf.to_object(oc_from_file.model)
-      trainer_cfg = OmegaConf.to_object(oc_from_file.trainer)
-
-      # 🔧 Remove Hydra’s internal keys safely
-      dataset_cfg.pop("_target_", None)
-      optim_cfg.pop("_target_", None)
-      model_cfg.pop("_target_", None)
-      trainer_cfg.pop("_target_", None)
-
-      micro_batch_size = optim_cfg.get('micro_batch_size', dataset_cfg['batch_size'])
-      total_batch_size = optim_cfg['total_batch_size']
-      max_epochs = optim_cfg['max_epochs']
-      seed = optim_cfg['seed']
-
+        oc_from_file = OmegaConf.load(open(args.cfg, "r"))
+        dataset_cfg = OmegaConf.to_object(oc_from_file.dataset)
+        optim_cfg = OmegaConf.to_object(oc_from_file.optim)
+        dataset_cfg.pop("_target_", None)
+        seed = optim_cfg['seed']
     else:
-        # It's better to require a config file to avoid ambiguity.
         raise ValueError("A configuration file path must be provided via --cfg argument.")
     
     seed_everything(seed, workers=True)
     
-    # Instantiate the custom SSTDataModule using parameters from the YAML file
     dm = SSTDataModule(**dataset_cfg)
-    dm.setup()
-    
-    # Ensure gpus is at least 1 for this calculation
-    num_gpus = max(1, args.gpus)
-    accumulate_grad_batches = total_batch_size // (micro_batch_size * num_gpus)
-    
-    num_train_samples = len(dm.sst_train)
-    # Correctly calculate total steps for the learning rate scheduler
-    total_num_steps = (num_train_samples // total_batch_size) * max_epochs
     
     pl_module = CuboidSSTPLModule(
-        total_num_steps=total_num_steps,
         save_dir=args.save,
         oc_file=args.cfg
     )
+    
+    micro_batch_size = optim_cfg.get('micro_batch_size', dataset_cfg['batch_size'])
+    total_batch_size = optim_cfg['total_batch_size']
+    num_gpus = max(1, args.gpus)
+    accumulate_grad_batches = total_batch_size // (micro_batch_size * num_gpus)
     
     trainer_kwargs = pl_module.set_trainer_kwargs(
         devices=args.gpus,
@@ -381,9 +366,7 @@ def main():
                 ckpt_path = None
         
         trainer.fit(model=pl_module, datamodule=dm, ckpt_path=ckpt_path)
-        # Test using the best checkpoint automatically after training finishes
         trainer.test(datamodule=dm, ckpt_path='best')
 
 if __name__ == "__main__":
     main()
-
