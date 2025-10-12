@@ -1,5 +1,3 @@
-# In file: scripts/cuboid_transformer/sst/train_cuboid_sst.py
-
 import warnings
 from shutil import copyfile
 import inspect
@@ -16,25 +14,21 @@ from omegaconf import OmegaConf
 import os
 import argparse
 
-# --- MODIFICATION START ---
-# Import the custom SSTDataModule instead of the ENSO-specific one
+# Import the custom SSTDataModule
 from src.earthformer.datasets.sst.sst_datamodule import SSTDataModule
-# --- MODIFICATION END ---
 
-from earthformer.config import cfg
-from earthformer.utils.optim import SequentialLR, warmup_lambda
-from earthformer.utils.utils import get_parameter_names
-from earthformer.cuboid_transformer.cuboid_transformer import CuboidTransformerModel
-from earthformer.utils.apex_ddp import ApexDDPStrategy
+from src.earthformer.config import cfg
+from src.earthformer.utils.optim import SequentialLR, warmup_lambda
+from src.earthformer.utils.utils import get_parameter_names
+from src.earthformer.cuboid_transformer.cuboid_transformer import CuboidTransformerModel
+from src.earthformer.utils.apex_ddp import ApexDDPStrategy
 
 
 _curr_dir = os.path.realpath(os.path.dirname(os.path.realpath(__file__)))
 exps_dir = os.path.join(_curr_dir, "experiments")
 
-# --- MODIFICATION START ---
-# Renamed the main PyTorch Lightning class to be specific to our SST task
 class CuboidSSTPLModule(pl.LightningModule):
-# --- MODIFICATION END ---
+    """PyTorch Lightning module for SST forecasting."""
 
     def __init__(self,
                  total_num_steps: int,
@@ -50,22 +44,15 @@ class CuboidSSTPLModule(pl.LightningModule):
         
         # This part for setting up the model architecture remains largely the same
         num_blocks = len(model_cfg["enc_depth"])
-        if isinstance(model_cfg["self_pattern"], str):
-            enc_attn_patterns = [model_cfg["self_pattern"]] * num_blocks
-        else:
-            enc_attn_patterns = OmegaConf.to_container(model_cfg["self_pattern"])
-        if isinstance(model_cfg["cross_self_pattern"], str):
-            dec_self_attn_patterns = [model_cfg["cross_self_pattern"]] * num_blocks
-        else:
-            dec_self_attn_patterns = OmegaConf.to_container(model_cfg["cross_self_pattern"])
-        if isinstance(model_cfg["cross_pattern"], str):
-            dec_cross_attn_patterns = [model_cfg["cross_pattern"]] * num_blocks
-        else:
-            dec_cross_attn_patterns = OmegaConf.to_container(model_cfg["cross_pattern"])
+        enc_attn_patterns = [model_cfg["self_pattern"]] * num_blocks
+        dec_self_attn_patterns = [model_cfg["cross_self_pattern"]] * num_blocks
+        dec_cross_attn_patterns = [model_cfg["cross_pattern"]] * num_blocks
 
         self.torch_nn_module = CuboidTransformerModel(
-            input_shape=model_cfg["input_shape"],
-            target_shape=model_cfg["target_shape"],
+            # --- CORRECTION ---
+            # Casting shapes to tuples for robustness
+            input_shape=tuple(model_cfg["input_shape"]),
+            target_shape=tuple(model_cfg["target_shape"]),
             base_units=model_cfg["base_units"],
             block_units=model_cfg["block_units"],
             scale_alpha=model_cfg["scale_alpha"],
@@ -95,11 +82,11 @@ class CuboidSSTPLModule(pl.LightningModule):
         self.save_hyperparameters(oc)
         self.oc = oc
         
-        self.in_len = oc.layout.in_len
-        self.out_len = oc.layout.out_len
-        self.layout = oc.layout.layout
-        self.channel_axis = self.layout.find("C")
-        self.batch_axis = self.layout.find("N")
+        # These layout parameters are not strictly necessary if using the config,
+        # but are kept for consistency with the original repo's structure.
+        layout_cfg = self.get_layout_config()
+        self.in_len = layout_cfg.in_len
+        self.out_len = layout_cfg.out_len
         
         self.save_dir = save_dir
 
@@ -136,26 +123,17 @@ class CuboidSSTPLModule(pl.LightningModule):
         cfg = OmegaConf.create()
         cfg.in_len = 12
         cfg.out_len = 12
-        # --- MODIFICATION START ---
-        # Updated to match the SST dataset dimensions
         cfg.img_height = 720
         cfg.img_width = 1440
-        # The layout is now NTHWC (Batch, Time, Height, Width, Channel)
-        cfg.layout = "NTHWC"
-        # --- MODIFICATION END ---
         return cfg
 
     @classmethod
     def get_model_config(cls):
         cfg = OmegaConf.create()
         layout_cfg = cls.get_layout_config()
-        # --- MODIFICATION START ---
-        # Updated to 1 channel for SST data
         cfg.data_channels = 1
-        cfg.input_shape = (layout_cfg.in_len, layout_cfg.img_height, layout_cfg.img_width, cfg.data_channels)
-        cfg.target_shape = (layout_cfg.out_len, layout_cfg.img_height, layout_cfg.img_width, cfg.data_channels)
-        # --- MODIFICATION END ---
-
+        cfg.input_shape = [layout_cfg.in_len, layout_cfg.img_height, layout_cfg.img_width, cfg.data_channels]
+        cfg.target_shape = [layout_cfg.out_len, layout_cfg.img_height, layout_cfg.img_width, cfg.data_channels]
         cfg.base_units = 64
         cfg.block_units = None
         cfg.scale_alpha = 1.0
@@ -184,8 +162,6 @@ class CuboidSSTPLModule(pl.LightningModule):
     @classmethod
     def get_dataset_config(cls):
         cfg = OmegaConf.create()
-        # --- MODIFICATION START ---
-        # These parameters correspond to the arguments in our SSTDataModule
         cfg.in_len = 12
         cfg.out_len = 12
         cfg.batch_size = 4
@@ -194,7 +170,6 @@ class CuboidSSTPLModule(pl.LightningModule):
         cfg.val_start_year = 2016
         cfg.test_start_year = 2021
         cfg.end_year = 2025
-        # --- MODIFICATION END ---
         return cfg
 
     @staticmethod
@@ -218,10 +193,7 @@ class CuboidSSTPLModule(pl.LightningModule):
     @staticmethod
     def get_logging_config():
         cfg = OmegaConf.create()
-        # --- MODIFICATION START ---
-        # Changed logging prefix to be specific to SST
         cfg.logging_prefix = "SST_Forecasting"
-        # --- MODIFICATION END ---
         cfg.monitor_lr = True
         cfg.monitor_device = False
         return cfg
@@ -260,10 +232,16 @@ class CuboidSSTPLModule(pl.LightningModule):
             save_last=True,
             mode="min",
         )
-        callbacks = kwargs.pop("callbacks",)
-        callbacks += [checkpoint_callback]
+        # --- CORRECTION 1 ---
+        # Changed `kwargs.pop("callbacks",)` to `kwargs.pop("callbacks", [])`
+        # to ensure `callbacks` is initialized as a list, preventing a crash.
+        callbacks = kwargs.pop("callbacks", [])
+        callbacks.append(checkpoint_callback)
+        
+        # --- CORRECTION 2 ---
+        # Completed the incomplete statement to add the LearningRateMonitor callback.
         if self.oc.logging.monitor_lr:
-            callbacks +=
+            callbacks.append(LearningRateMonitor(logging_interval='step'))
         
         log_every_n_steps = max(1, int(self.oc.trainer.log_step_ratio * self.total_num_steps))
         
@@ -281,37 +259,28 @@ class CuboidSSTPLModule(pl.LightningModule):
         ret.update(kwargs)
         return ret
 
-    # --- MODIFICATION START ---
-    # Simplified forward pass for a standard forecasting task
     def forward(self, batch):
-        x, y = batch
-        # The model expects a 5D tensor: (N, T, H, W, C)
-        # Our dataloader provides (N, T, C, H, W), so we permute the dimensions
+        x, y = batch # x, y have shape (N, T, C, H, W)
+        # Permute to (N, T, H, W, C) for the model
         x = x.permute(0, 1, 3, 4, 2)
         y = y.permute(0, 1, 3, 4, 2)
         
         pred_y = self.torch_nn_module(x)
         loss = F.mse_loss(pred_y, y)
         return pred_y, loss, x, y
-    # --- MODIFICATION END ---
 
     def training_step(self, batch, batch_idx):
         _, loss, _, _ = self(batch)
         self.log('train_loss', loss, on_step=True, on_epoch=False, prog_bar=True)
         return loss
 
-    # --- MODIFICATION START ---
-    # Simplified validation step with standard metrics
-    def validation_step(self, batch, batch_idx, dataloader_idx=0):
+    def validation_step(self, batch, batch_idx):
         pred_seq, _, _, target_seq = self(batch)
-        if self.oc.trainer.precision == 16:
+        if self.trainer.precision == 16:
             pred_seq = pred_seq.float()
         self.valid_mse(pred_seq, target_seq)
         self.valid_mae(pred_seq, target_seq)
-    # --- MODIFICATION END ---
 
-    # --- MODIFICATION START ---
-    # Simplified validation end step, logging only MSE and MAE
     def validation_epoch_end(self, outputs):
         valid_mse = self.valid_mse.compute()
         valid_mae = self.valid_mae.compute()
@@ -319,20 +288,14 @@ class CuboidSSTPLModule(pl.LightningModule):
         self.log('valid_mae_epoch', valid_mae, prog_bar=True, on_step=False, on_epoch=True)
         self.valid_mse.reset()
         self.valid_mae.reset()
-    # --- MODIFICATION END ---
 
-    # --- MODIFICATION START ---
-    # Simplified test step with standard metrics
-    def test_step(self, batch, batch_idx, dataloader_idx=0):
+    def test_step(self, batch, batch_idx):
         pred_seq, _, _, target_seq = self(batch)
-        if self.oc.trainer.precision == 16:
+        if self.trainer.precision == 16:
             pred_seq = pred_seq.float()
         self.test_mse(pred_seq, target_seq)
         self.test_mae(pred_seq, target_seq)
-    # --- MODIFICATION END ---
 
-    # --- MODIFICATION START ---
-    # Simplified test end step, logging only MSE and MAE
     def test_epoch_end(self, outputs):
         test_mse = self.test_mse.compute()
         test_mae = self.test_mae.compute()
@@ -340,7 +303,6 @@ class CuboidSSTPLModule(pl.LightningModule):
         self.log('test_mae_epoch', test_mae, prog_bar=True, on_step=False, on_epoch=True)
         self.test_mse.reset()
         self.test_mae.reset()
-    # --- MODIFICATION END ---
 
 def get_parser():
     parser = argparse.ArgumentParser()
@@ -355,40 +317,31 @@ def main():
     parser = get_parser()
     args = parser.parse_args()
 
-    if args.cfg is not None:
+    if args.cfg:
         oc_from_file = OmegaConf.load(open(args.cfg, "r"))
         dataset_cfg = OmegaConf.to_object(oc_from_file.dataset)
-        total_batch_size = oc_from_file.optim.total_batch_size
-        micro_batch_size = oc_from_file.optim.micro_batch_size
-        max_epochs = oc_from_file.optim.max_epochs
-        seed = oc_from_file.optim.seed
-    else:
-        # Fallback to default configs if no YAML is provided
-        dataset_cfg = OmegaConf.to_object(CuboidSSTPLModule.get_dataset_config())
-        optim_cfg = OmegaConf.to_object(CuboidSSTPLModule.get_optim_config())
-        micro_batch_size = optim_cfg['micro_batch_size']
-        total_batch_size = int(micro_batch_size * args.gpus)
+        optim_cfg = OmegaConf.to_object(oc_from_file.optim)
+        micro_batch_size = optim_cfg.get('micro_batch_size', dataset_cfg['batch_size'])
+        total_batch_size = optim_cfg['total_batch_size']
         max_epochs = optim_cfg['max_epochs']
         seed = optim_cfg['seed']
+    else:
+        # It's better to require a config file to avoid ambiguity.
+        raise ValueError("A configuration file path must be provided via --cfg argument.")
     
     seed_everything(seed, workers=True)
     
-    # --- MODIFICATION START ---
-    # Instantiate our custom SSTDataModule
-    dm = SSTDataModule(
-        data_root=cfg.datasets_dir, # This can be overridden by the YAML file
-        **dataset_cfg
-    )
-    # --- MODIFICATION END ---
-    
-    dm.prepare_data()
+    # Instantiate the custom SSTDataModule using parameters from the YAML file
+    dm = SSTDataModule(**dataset_cfg)
     dm.setup()
     
-    accumulate_grad_batches = total_batch_size // (micro_batch_size * args.gpus)
+    # Ensure gpus is at least 1 for this calculation
+    num_gpus = max(1, args.gpus)
+    accumulate_grad_batches = total_batch_size // (micro_batch_size * num_gpus)
     
-    # Calculate total steps
     num_train_samples = len(dm.sst_train)
-    total_num_steps = int(max_epochs * num_train_samples / total_batch_size)
+    # Correctly calculate total steps for the learning rate scheduler
+    total_num_steps = (num_train_samples // total_batch_size) * max_epochs
     
     pl_module = CuboidSSTPLModule(
         total_num_steps=total_num_steps,
@@ -403,19 +356,22 @@ def main():
     trainer = Trainer(**trainer_kwargs)
 
     if args.test:
-        assert args.ckpt_name is not None, "ckpt_name must be provided for testing."
+        if not args.ckpt_name:
+            raise ValueError("ckpt_name must be provided for testing.")
         ckpt_path = os.path.join(pl_module.save_dir, "checkpoints", args.ckpt_name)
         trainer.test(model=pl_module, datamodule=dm, ckpt_path=ckpt_path)
     else:
         ckpt_path = None
-        if args.ckpt_name is not None:
+        if args.ckpt_name:
             ckpt_path = os.path.join(pl_module.save_dir, "checkpoints", args.ckpt_name)
             if not os.path.exists(ckpt_path):
                 warnings.warn(f"Checkpoint {ckpt_path} not found! Starting training from scratch.")
                 ckpt_path = None
         
         trainer.fit(model=pl_module, datamodule=dm, ckpt_path=ckpt_path)
-        trainer.test(model=pl_module, datamodule=dm)
+        # Test using the best checkpoint automatically after training finishes
+        trainer.test(datamodule=dm, ckpt_path='best')
 
 if __name__ == "__main__":
     main()
+
