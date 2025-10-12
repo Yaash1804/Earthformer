@@ -21,7 +21,7 @@ from src.earthformer.config import cfg
 from src.earthformer.utils.optim import SequentialLR, warmup_lambda
 from src.earthformer.utils.utils import get_parameter_names
 from src.earthformer.cuboid_transformer.cuboid_transformer import CuboidTransformerModel
-from src.earthformer.utils.apex_ddp import ApexDDPStrategy
+#from src.earthformer.utils.apex_ddp import ApexDDPStrategy
 
 
 _curr_dir = os.path.realpath(os.path.dirname(os.path.realpath(__file__)))
@@ -318,13 +318,25 @@ def main():
     args = parser.parse_args()
 
     if args.cfg:
-        oc_from_file = OmegaConf.load(open(args.cfg, "r"))
-        dataset_cfg = OmegaConf.to_object(oc_from_file.dataset)
-        optim_cfg = OmegaConf.to_object(oc_from_file.optim)
-        micro_batch_size = optim_cfg.get('micro_batch_size', dataset_cfg['batch_size'])
-        total_batch_size = optim_cfg['total_batch_size']
-        max_epochs = optim_cfg['max_epochs']
-        seed = optim_cfg['seed']
+      oc_from_file = OmegaConf.load(open(args.cfg, "r"))
+
+      # Convert to dict
+      dataset_cfg = OmegaConf.to_object(oc_from_file.dataset)
+      optim_cfg = OmegaConf.to_object(oc_from_file.optim)
+      model_cfg = OmegaConf.to_object(oc_from_file.model)
+      trainer_cfg = OmegaConf.to_object(oc_from_file.trainer)
+
+      # 🔧 Remove Hydra’s internal keys safely
+      dataset_cfg.pop("_target_", None)
+      optim_cfg.pop("_target_", None)
+      model_cfg.pop("_target_", None)
+      trainer_cfg.pop("_target_", None)
+
+      micro_batch_size = optim_cfg.get('micro_batch_size', dataset_cfg['batch_size'])
+      total_batch_size = optim_cfg['total_batch_size']
+      max_epochs = optim_cfg['max_epochs']
+      seed = optim_cfg['seed']
+
     else:
         # It's better to require a config file to avoid ambiguity.
         raise ValueError("A configuration file path must be provided via --cfg argument.")
