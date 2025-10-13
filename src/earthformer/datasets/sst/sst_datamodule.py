@@ -44,62 +44,47 @@ class SSTDataModule(pl.LightningDataModule):
                  train_end_year: int = 2015,
                  val_end_year: int = 2020):
         super().__init__()
-        print("🐛 [DEBUG] Initializing SSTDataModule...")
-        # Save hyperparameters
         self.save_hyperparameters()
 
         self.sst_train = None
         self.sst_val = None
         self.sst_test = None
+        
+        self.train_time_index = None
+        self.val_time_index = None
+        self.test_time_index = None
 
     def prepare_data(self):
-        # This is for downloading, can be left empty
         pass
 
     def setup(self, stage: str = None):
-        print(f"🚀 [DEBUG] SSTDataModule setup() called for stage: '{stage}'")
-        
-        # --- Step 1: Load data ONCE ---
         file_path = os.path.join(self.hparams.data_root, "sst.mon.mean.nc")
         if not os.path.exists(file_path):
             raise FileNotFoundError(f"Dataset file not found at {file_path}")
         
-        print(f"⏳ [DEBUG] Loading NetCDF file ONCE from: {file_path}")
         ds = xr.open_dataset(file_path)
 
-        # --- NEW: CROP TO YOUR REGION OF INTEREST ---
-        print("🌍 [DEBUG] Cropping dataset to specified lat/lon patch...")
         lat_slice = slice(15.625, 20.625)
         lon_slice = slice(65.625, 72.375)
         ds = ds.sel(lat=lat_slice, lon=lon_slice)
-        print(f"✅ [DEBUG] Cropping complete. New dimensions: lat={len(ds.lat)}, lon={len(ds.lon)}")
-        # --- END OF NEW STEP ---
 
-        # --- Step 2: Calculate normalization stats correctly ONCE ---
-        # Note: Stats are now calculated only on your region of interest
         train_slice = slice(None, str(self.hparams.train_end_year))
-        print("⏳ [DEBUG] Calculating normalization stats from the cropped training slice...")
         train_data_for_stats = ds['sst'].sel(time=train_slice).values.astype(np.float32)
         
-        # FIX: Use nanmean and nanstd to handle missing values
         mean = np.nanmean(train_data_for_stats)
         std = np.nanstd(train_data_for_stats)
-        print(f"📊 [DEBUG] Normalization stats for patch: mean={mean:.4f}, std={std:.4f}")
+        self.mean = mean
+        self.std = std
 
-        # --- Step 3: Preprocess full data ONCE ---
-        print("⏳ [DEBUG] Processing cropped dataset...")
         full_data = ds['sst'].values.astype(np.float32)
         
-        # FIX: Fill NaNs using the correctly calculated mean
+        # --- FIX: Corrected the typo from full_.data to full_data ---
         full_data = np.nan_to_num(full_data, nan=mean)
+        # --- END OF FIX ---
         
-        # Normalize the entire dataset
         full_data_normalized = (full_data - mean) / std
-        # Add channel dimension
         full_data_normalized = full_data_normalized[:, np.newaxis, :, :]
-        print(f"✅ [DEBUG] Cropped dataset processed. Shape: {full_data_normalized.shape}")
 
-        # --- Step 4: Split data into arrays ---
         time_index = ds.get_index("time")
         val_slice = slice(str(self.hparams.train_end_year + 1), str(self.hparams.val_end_year))
         test_slice = slice(str(self.hparams.val_end_year + 1), None)
@@ -112,18 +97,15 @@ class SSTDataModule(pl.LightningDataModule):
         val_array = full_data_normalized[val_indices]
         test_array = full_data_normalized[test_indices]
         
-        print(f"📊 [DEBUG] Train array shape: {train_array.shape}")
-        print(f"📊 [DEBUG] Val array shape:   {val_array.shape}")
-        print(f"📊 [DEBUG] Test array shape:  {test_array.shape}")
+        self.train_time_index = time_index[train_indices]
+        self.val_time_index = time_index[val_indices]
+        self.test_time_index = time_index[test_indices]
 
-        # --- Step 5: Instantiate lightweight datasets ---
         if stage == "fit" or stage is None:
             self.sst_train = SSTDataset(data=train_array, in_len=self.hparams.in_len, out_len=self.hparams.out_len)
             self.sst_val = SSTDataset(data=val_array, in_len=self.hparams.in_len, out_len=self.hparams.out_len)
         if stage == "test" or stage is None:
             self.sst_test = SSTDataset(data=test_array, in_len=self.hparams.in_len, out_len=self.hparams.out_len)
-        
-        print("✅ [DEBUG] SSTDataModule setup() finished.")
 
     def train_dataloader(self):
         return DataLoader(self.sst_train, batch_size=self.hparams.batch_size, shuffle=True,
