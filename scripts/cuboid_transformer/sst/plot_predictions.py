@@ -39,7 +39,7 @@ def plot_model_predictions():
     CFG_PATH = "/content/Earthformer/scripts/cuboid_transformer/sst/sst.yaml"
     
     # !!! UPDATE THIS PATH !!!
-    CHECKPOINT_PATH = "/content/Earthformer/scripts/cuboid_transformer/sst/experiments/sst_colab_run_1/checkpoints/model-epoch=018.ckpt"
+    CHECKPOINT_PATH = "/content/Earthformer/scripts/cuboid_transformer/sst/experiments/sst_colab_run_1/checkpoints/model-epoch=019.ckpt"
 
     # !!! UPDATE THIS NAME !!!
     save_directory_name = "sst_colab_run_1"
@@ -139,9 +139,9 @@ def plot_model_predictions():
     ax.plot(test_times, test_actuals, label='Actual Test', color='red', linewidth=2)
 
     # --- MODIFICATION: Commented out the predicted data plotting ---
-    # ax.plot(train_times, train_preds, label='Predicted Train (1-Month Ahead)', linestyle='--', color='cyan', alpha=0.9)
-    # ax.plot(val_times, val_preds, label='Predicted Val (1-Month Ahead)', linestyle='--', color='lime', alpha=0.9)
-    # ax.plot(test_times, test_preds, label='Predicted Test (1-Month Ahead)', linestyle='--', color='magenta', alpha=0.9)
+    ax.plot(train_times, train_preds, label='Predicted Train (1-Month Ahead)', linestyle='--', color='cyan', alpha=0.9)
+    ax.plot(val_times, val_preds, label='Predicted Val (1-Month Ahead)', linestyle='--', color='lime', alpha=0.9)
+    ax.plot(test_times, test_preds, label='Predicted Test (1-Month Ahead)', linestyle='--', color='magenta', alpha=0.9)
     # --- END OF MODIFICATION ---
 
     # Formatting
@@ -152,7 +152,7 @@ def plot_model_predictions():
     ax.grid(True)
     fig.tight_layout()
 
-    save_path = 'sst_actual_data_only.png'
+    save_path = 'sst_onestep_predictions_best_model.png'
     plt.savefig(save_path, dpi=300)
     print(f"\nPlot saved successfully as {save_path}")
 

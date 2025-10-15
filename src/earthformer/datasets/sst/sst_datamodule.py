@@ -108,7 +108,7 @@ class SSTDataModule(pl.LightningDataModule):
             self.sst_test = SSTDataset(data=test_array, in_len=self.hparams.in_len, out_len=self.hparams.out_len)
 
     def train_dataloader(self):
-        return DataLoader(self.sst_train, batch_size=self.hparams.batch_size, shuffle=True,
+        return DataLoader(self.sst_train, batch_size=self.hparams.batch_size, shuffle=False,
                           num_workers=self.hparams.num_workers, pin_memory=True)
 
     def val_dataloader(self):

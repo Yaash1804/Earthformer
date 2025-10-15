@@ -39,14 +39,14 @@ model:
 
 # --- Optimizer and Scheduler Configuration ---
 optim:
-  total_batch_size: 32        # Added to match code expectations
-  micro_batch_size: 2         # Added to match code expectations
+  total_batch_size: 32      # Added to match code expectations
+  micro_batch_size: 2       # Added to match code expectations
   seed: 2022
   method: "adamw"
   lr: 1.0e-4
   wd: 0.05
   gradient_clip_val: 1.0
-  max_epochs: 50
+  max_epochs: 100           # <-- CHANGE THIS (from 50 to 100)
   lr_scheduler_mode: "cosine"
   min_lr_ratio: 1.0e-3
   warmup_min_lr_ratio: 0.0
@@ -68,7 +68,7 @@ logging:
 trainer:
   gpus: 1
   strategy: "ddp"
-  max_epochs: 50
+  max_epochs: 100           # <-- CHANGE THIS (from 50 to 100)
   precision: 16
   check_val_every_n_epoch: 1
   log_step_ratio: 0.01
