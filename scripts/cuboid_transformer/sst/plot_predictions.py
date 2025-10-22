@@ -13,7 +13,6 @@
 # ==============================================================================
 
 # --- ROBUST FIX for Matplotlib Backend Error ---
-#hi
 import matplotlib
 matplotlib.use('Agg')
 # --- END OF FIX ---
