@@ -4,7 +4,6 @@
 # This version is refactored to automatically generate plots for a predefined
 # list of scenarios. It also calculates and displays the Mean Squared Error (MSE)
 # for each plot.
-#
 # INSTRUCTIONS:
 # 1. Save this file as `plot_multiple_patches.py`.
 # 2. Update the `CHECKPOINT_PATH` and `DATA_ROOT` if needed.
