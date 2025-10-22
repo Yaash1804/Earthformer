@@ -1,0 +1,13 @@
+numpy
+# For PyTorch, we specify the extra index URL in the workflow file
+# but Dependabot can still track the base versions.
+torch
+torchvision
+torchmetrics
+pytorch-lightning
+omegaconf
+xarray
+einops
+netCDF4
+matplotlib
+scikit-learn
