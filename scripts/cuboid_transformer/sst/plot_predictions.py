@@ -1,11 +1,14 @@
 # ==============================================================================
 # SCRIPT FOR PLOTTING MODEL PREDICTIONS vs. ACTUAL DATA (FINAL CORRECTED VERSION)
 #
+# This version now calculates and displays the MSE for each data split on the plot.
+#
 # INSTRUCTIONS:
 # 1. Ensure `sst_datamodule.py` has the small addition for the time index.
 # 2. Save this file as `plot_predictions.py`.
 # 3. Update the `CHECKPOINT_PATH` and `save_directory_name` variables below.
 # 4. Run from a Colab cell using the command:
+#    !pip install scikit-learn
 #    !MPLBACKEND=Agg python /path/to/your/plot_predictions.py
 # ==============================================================================
 
@@ -21,6 +24,8 @@ import matplotlib.pyplot as plt
 import os
 from omegaconf import OmegaConf
 import warnings
+# --- NEW IMPORT FOR MSE CALCULATION ---
+from sklearn.metrics import mean_squared_error
 
 warnings.filterwarnings("ignore", "This DataLoader will create .* worker processes .*")
 warnings.filterwarnings("ignore", "torch.meshgrid: in an upcoming release, it will be required to pass the indexing argument.")
@@ -68,15 +73,19 @@ def plot_model_predictions():
 
     dataset_cfg = OmegaConf.to_object(model.hparams.dataset)
     dataset_cfg.pop("_target_", None)
-    dataset_cfg.pop("train_start_year", None)
-    dataset_cfg.pop("val_start_year", None)
-    dataset_cfg.pop("test_start_year", None)
-    dataset_cfg.pop("end_year", None)
+    for key in ["train_start_year", "val_start_year", "test_start_year", "end_year"]:
+        dataset_cfg.pop(key, None)
 
     datamodule = SSTDataModule(**dataset_cfg)
     datamodule.setup()
-
-    train_loader = datamodule.train_dataloader()
+    
+    # Create a non-shuffled train_loader for chronological plotting
+    train_loader = torch.utils.data.DataLoader(
+        datamodule.sst_train,
+        batch_size=datamodule.hparams.batch_size,
+        shuffle=False, # Use False for chronological plotting
+        num_workers=datamodule.hparams.num_workers
+    )
     val_loader = datamodule.val_dataloader()
     test_loader = datamodule.test_dataloader()
     print("Data is ready.")
@@ -121,6 +130,13 @@ def plot_model_predictions():
     test_actuals = (test_actuals_norm * std) + mean
     print("De-normalization complete.")
 
+    # --- NEW: CALCULATE MSE FOR EACH SPLIT ---
+    mse_train = mean_squared_error(train_actuals, train_preds)
+    mse_val = mean_squared_error(val_actuals, val_preds)
+    mse_test = mean_squared_error(test_actuals, test_preds)
+    print(f"\nCalculated MSEs - Train: {mse_train:.4f}, Val: {mse_val:.4f}, Test: {mse_test:.4f}")
+    # --- END OF NEW SECTION ---
+
     # --- 7. GET TIME AXIS ---
     print("\nStep 7: Preparing time coordinates for plotting...")
     in_len = datamodule.hparams.in_len
@@ -138,14 +154,18 @@ def plot_model_predictions():
     ax.plot(val_times, val_actuals, label='Actual Val', color='green', linewidth=2)
     ax.plot(test_times, test_actuals, label='Actual Test', color='red', linewidth=2)
 
-    # --- MODIFICATION: Commented out the predicted data plotting ---
+    # Plot Predicted Data
     ax.plot(train_times, train_preds, label='Predicted Train (1-Month Ahead)', linestyle='--', color='cyan', alpha=0.9)
     ax.plot(val_times, val_preds, label='Predicted Val (1-Month Ahead)', linestyle='--', color='lime', alpha=0.9)
     ax.plot(test_times, test_preds, label='Predicted Test (1-Month Ahead)', linestyle='--', color='magenta', alpha=0.9)
+
+    # --- MODIFICATION: UPDATED TITLE WITH MSE VALUES ---
+    ax.set_title(f'SST Forecasting: Actual vs. Predicted\n'
+                 f'MSE - Train: {mse_train:.4f} | Val: {mse_val:.4f} | Test: {mse_test:.4f}',
+                 fontsize=16)
     # --- END OF MODIFICATION ---
 
     # Formatting
-    ax.set_title('SST Forecasting: Actual Data', fontsize=18)
     ax.set_xlabel('Date', fontsize=14)
     ax.set_ylabel('Spatially-Averaged SST (°C)', fontsize=14)
     ax.legend(loc='upper left', fontsize=12)
