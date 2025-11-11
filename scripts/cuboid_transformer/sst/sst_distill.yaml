@@ -1,0 +1,59 @@
+# scripts/configs/sevir_distill.yaml
+
+datamodule:
+  # Config for your DataModule (e.g., SevirDataModule [1, 25])
+  # These MUST be set to match the 12-in, 12-out structure
+  seq_len: 12
+  pred_len: 12
+  
+  # Paths to your patch data (21x28)
+  train_data_dir: '/path/to/your/training/patches'
+  val_data_dir: '/path/to/your/validation/patches'
+  test_data_dir: '/path/to/your/test/patches'
+  
+  # Dataloader params
+  batch_size: 16  # Adjust based on your GPU memory
+  num_workers: 8
+
+student:
+  # Config for the ConvLSTM student model
+  # The input_dim MUST match the output channel count of your teacher model.
+  # If your teacher outputs 1 channel (e.g., VIL), this is 1.
+  input_dim: 1
+  
+  # A list of hidden channel dimensions for each layer
+  hidden_dim:  
+  
+  # Kernel size for the convolutional gates
+  kernel_size:  
+  
+  # Number of layers (must match length of hidden_dim)
+  num_layers: 3
+
+optimizer:
+  # Config for the Adam optimizer (for the STUDENT only)
+  lr: 0.001
+  weight_decay: 0.0
+
+trainer:
+  # PyTorch Lightning Trainer configuration 
+  default_root_dir: '/path/to/save/checkpoints_and_logs'
+  max_epochs: 50
+  accelerator: 'gpu'
+  devices:  # Specify which GPU(s) to use
+  strategy: 'auto' # Use 'ddp' for multi-GPU
+  
+  # Optional: Define callbacks
+  callbacks:
+    model_checkpoint:
+      # Saves the best model based on validation loss
+      monitor: 'val_loss'
+      mode: 'min'
+      save_top_k: 1
+      filename: 'student-refiner-{epoch:02d}-{val_loss:.4f}'
+    
+    early_stopping:
+      # Stops training if val_loss doesn't improve
+      monitor: 'val_loss'
+      mode: 'min'
+      patience: 5
