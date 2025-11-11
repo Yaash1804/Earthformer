@@ -1,116 +1,207 @@
-import os
-import argparse
-import warnings
 import torch
-import lightning as L
-from omegaconf import OmegaConf
+import torch.nn as nn
 
-# --- Assumed/Required Imports from Earthformer Repo ---
-# This assumes the SEVIR DataModule is defined in this path.
-# Adjust if your patch data uses a different DataModule.
-try:
-    from earthformer.datamodules.sevir import SevirDataModule
-except ImportError:
-    print("WARNING: Could not import 'SevirDataModule' from 'earthformer.datamodules.sevir'.")
-    print("Please ensure the DataModule is in the correct path.")
-    # Define a placeholder
-    class SevirDataModule(L.LightningDataModule):
-        def __init__(self, *args, **kwargs):
-            super().__init__()
-            print("ERROR: Using placeholder SevirDataModule!")
-            raise NotImplementedError("Original SevirDataModule not found!")
-# ----------------------------------------------------
-
-# Import the new LightningModule
-from earthformer.distill_lightning import DistillLitModule
-
-def main(args):
-    # Load configuration file
-    print(f"Loading experiment configuration from: {args.config_path}")
-    cfg = OmegaConf.load(args.config_path)
-
-    # Set up data module
-    # The config file (sevir_distill.yaml) must have a 'datamodule' section
-    print("Setting up DataModule...")
-    datamodule_cfg = cfg.get('datamodule', {})
-    if not datamodule_cfg:
-        raise ValueError("Config file must contain a 'datamodule' section.")
+class ConvLSTMCell(nn.Module):
+    """
+    A simple ConvLSTM Cell implementation.
+    Based on the paper: "Convolutional LSTM Network: A Machine Learning Approach for Precipitation Nowcasting"
+    """
+    def __init__(self, input_dim, hidden_dim, kernel_size, bias=True):
+        """
+        Initialize ConvLSTM cell.
         
-    # This assumes you are using a DataModule compatible with the SEVIR one,
-    # which takes 'seq_len', 'pred_len', 'batch_size', etc.
-    # Ensure your datamodule_cfg provides the correct 12-in, 12-out sequence
-    datamodule = SevirDataModule(**datamodule_cfg)
+        Parameters
+        ----------
+        input_dim: int
+            Number of channels of input tensor.
+        hidden_dim: int
+            Number of channels of hidden state.
+        kernel_size: (int, int)
+            Size of the convolutional kernel.
+        bias: bool
+            Whether or not to add the bias.
+        """
+        super(ConvLSTMCell, self).__init__()
 
-    # Set up the Teacher-Student Lightning Module
-    print("Setting up DistillLitModule...")
-    student_cfg = cfg.get('student', None)
-    optimizer_cfg = cfg.get('optimizer', None)
-    if not student_cfg or not optimizer_cfg:
-        raise ValueError("Config file must contain 'student' and 'optimizer' sections.")
+        self.input_dim = input_dim
+        self.hidden_dim = hidden_dim
 
-    model = DistillLitModule(
-        teacher_ckpt_path=args.teacher_ckpt_path,
-        teacher_config_path=args.teacher_config_path,
-        student_cfg=student_cfg,
-        optimizer_cfg=optimizer_cfg
-    )
+        self.kernel_size = kernel_size
+        self.padding = kernel_size[0] // 2, kernel_size[1] // 2
+        self.bias = bias
+        
+        # Combined convolution for all 4 gates (input, forget, output, cell)
+        self.conv = nn.Conv2d(in_channels=self.input_dim + self.hidden_dim,
+                              out_channels=4 * self.hidden_dim,
+                              kernel_size=self.kernel_size,
+                              padding=self.padding,
+                              bias=self.bias)
 
-    # Set up the Trainer
-    # The config file must have a 'trainer' section
-    print("Setting up Trainer...")
-    trainer_cfg = cfg.get('trainer', {})
-    if not trainer_cfg:
-        raise ValueError("Config file must contain a 'trainer' section.")
+    def forward(self, input_tensor, cur_state):
+        """
+        Forward pass of the ConvLSTM cell.
+        
+        Parameters
+        ----------
+        input_tensor: torch.Tensor
+            Input tensor of shape (batch_size, input_dim, height, width)
+        cur_state: tuple
+            Tuple containing the previous hidden state (h_cur) and cell state (c_cur)
+            h_cur, c_cur shape: (batch_size, hidden_dim, height, width)
+            
+        Returns
+        -------
+        h_next, c_next: torch.Tensor
+            Next hidden state and cell state
+        """
+        h_cur, c_cur = cur_state
+        
+        # Concatenate input and hidden state
+        combined = torch.cat([input_tensor, h_cur], dim=1)  # (batch_size, input_dim + hidden_dim, H, W)
+        
+        # Apply combined convolution
+        combined_conv = self.conv(combined)
+        
+        # Split the output into the 4 gates
+        cc_i, cc_f, cc_o, cc_g = torch.split(combined_conv, self.hidden_dim, dim=1) 
+        
+        # Apply activations
+        i = torch.sigmoid(cc_i)
+        f = torch.sigmoid(cc_f)
+        o = torch.sigmoid(cc_o)
+        g = torch.tanh(cc_g)
 
-    # Setup callbacks (e.g., ModelCheckpoint)
-    callbacks =
-    if 'callbacks' in trainer_cfg:
-        for cb_name, cb_cfg in trainer_cfg.callbacks.items():
-            if cb_name == 'model_checkpoint':
-                print("Setting up ModelCheckpoint callback.")
-                cb_cfg_dict = OmegaConf.to_container(cb_cfg, resolve=True)
-                callbacks.append(L.pytorch.callbacks.ModelCheckpoint(**cb_cfg_dict))
-            # Add other callbacks like EarlyStopping if needed
-            elif cb_name == 'early_stopping':
-                print("Setting up EarlyStopping callback.")
-                cb_cfg_dict = OmegaConf.to_container(cb_cfg, resolve=True)
-                callbacks.append(L.pytorch.callbacks.EarlyStopping(**cb_cfg_dict))
+        # Calculate next cell state
+        c_next = f * c_cur + i * g
+        # Calculate next hidden state
+        h_next = o * torch.tanh(c_next)
+        
+        return h_next, c_next
 
-    # Clean trainer_cfg from callback definitions if they exist
-    trainer_cfg_dict = OmegaConf.to_container(trainer_cfg, resolve=True)
-    trainer_cfg_dict.pop('callbacks', None)
+    def init_hidden(self, batch_size, image_size):
+        """
+        Initialize hidden state and cell state with zeros.
+        
+        Parameters
+        ----------
+        batch_size: int
+            Size of the batch
+        image_size: (int, int)
+            Height and width of the image
+            
+        Returns
+        -------
+        (h, c): tuple
+            Tuple of zero-initialized hidden and cell states
+        """
+        height, width = image_size
+        return (torch.zeros(batch_size, self.hidden_dim, height, width, device=self.conv.weight.device),
+                torch.zeros(batch_size, self.hidden_dim, height, width, device=self.conv.weight.device))
 
-    trainer = L.Trainer(
-        callbacks=callbacks,
-        **trainer_cfg_dict
-    )
 
-    # Start training
-    print("Starting training...")
-    trainer.fit(model, datamodule=datamodule)
+class ConvLSTMStudent(nn.Module):
+    """
+    The ConvLSTM Student model.
+    Based on the architecture from the original report: 
+    Two ConvLSTM layers with 12 filters and 3x3 kernels.
+    """
+    def __init__(self, input_dim=1, hidden_dim=12, kernel_size=(3, 3), num_layers=2, bias=True):
+        """
+        Initialize the ConvLSTM Student model.
+        
+        Parameters
+        ----------
+        input_dim: int
+            Number of channels in input tensor (1 for SST)
+        hidden_dim: int
+            Number of hidden channels (12 as per original report)
+        kernel_size: (int, int)
+            Kernel size (3x3 as per original report)
+        num_layers: int
+            Number of ConvLSTM layers (2 as per original report)
+        bias: bool
+            Whether to add bias
+        """
+        super(ConvLSTMStudent, self).__init__()
 
-    print("Training finished.")
-    
-    # Optionally, run testing
-    if args.test_after_train:
-        print("Starting testing...")
-        trainer.test(model, datamodule=datamodule, ckpt_path='best')
-        print("Testing finished.")
+        self.num_layers = num_layers
+        self.hidden_dim = hidden_dim
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Train Earthformer-ConvLSTM Refinement Model")
-    
-    parser.add_argument('--config_path', type=str, required=True,
-                        help="Path to the.yaml config file for the distillation experiment.")
-                        
-    parser.add_qrguemnt('--teacher_ckpt_path', type=str, required=True,
-                        help="Path to the pre-trained Earthformer teacher model checkpoint (.ckpt).")
-                        
-    parser.add_argument('--teacher_config_path', type=str, required=True,
-                        help="Path to the original.yaml config file used to train the teacher model.")
-                        
-    parser.add_argument('--test_after_train', action='store_true',
-                        help="Run the test set after training is complete.")
+        self.cell_list = nn.ModuleList()
+        for i in range(self.num_layers):
+            cur_input_dim = input_dim if i == 0 else hidden_dim
+            self.cell_list.append(ConvLSTMCell(input_dim=cur_input_dim,
+                                               hidden_dim=self.hidden_dim,
+                                               kernel_size=kernel_size,
+                                               bias=bias))
+        
+        # Final convolution layer to map hidden state to 1 output channel
+        self.output_conv = nn.Conv2d(in_channels=self.hidden_dim,
+                                     out_channels=1,
+                                     kernel_size=(1, 1),
+                                     padding=0,
+                                     bias=True)
 
-    args = parser.parse_args()
-    main(args)
+    def forward(self, input_tensor, hidden_state=None):
+        """
+        Forward pass for the ConvLSTM Student.
+        
+        Parameters
+        ----------
+        input_tensor: torch.Tensor
+            Input tensor of shape (b, seq_len, c, h, w)
+            For this project, seq_len=1 and c=1.
+        hidden_state: list
+            List of (h, c) tuples for each layer
+            
+        Returns
+        -------
+        output_tensor: torch.Tensor
+            Output tensor of shape (b, 1, 1, h, w)
+        """
+        b, seq_len, _, h, w = input_tensor.size()
+        
+        # Initialize hidden state if not provided
+        if hidden_state is None:
+            hidden_state = self._init_hidden(batch_size=b, image_size=(h, w))
+        
+        layer_output_list = []
+        last_state_list = []
+        
+        cur_layer_input = input_tensor
+
+        for layer_idx in range(self.num_layers):
+            h, c = hidden_state[layer_idx]
+            output_inner = []
+            
+            # Unroll in time (seq_len is 1 for this project)
+            for t in range(seq_len):
+                h, c = self.cell_list[layer_idx](input_tensor=cur_layer_input[:, t, :, :, :],
+                                                 cur_state=[h, c])
+                output_inner.append(h)
+            
+            # Stack the time-steps
+            layer_output = torch.stack(output_inner, dim=1)
+            cur_layer_input = layer_output # Output of this layer is input to next
+            
+            last_state_list.append([h, c])
+
+        # We only care about the output of the last layer
+        # layer_output shape is (b, seq_len, hidden_dim, h, w)
+        
+        # Apply output conv to each time step
+        # (b, seq_len, hidden_dim, h, w) -> (b * seq_len, hidden_dim, h, w)
+        output = layer_output.view(b * seq_len, self.hidden_dim, h, w)
+        output = self.output_conv(output)
+        
+        # (b * seq_len, 1, h, w) -> (b, seq_len, 1, h, w)
+        output = output.view(b, seq_len, 1, h, w)
+
+        return output
+
+    def _init_hidden(self, batch_size, image_size):
+        """Initializes hidden states for all layers."""
+        init_states = []
+        for i in range(self.num_layers):
+            init_states.append(self.cell_list[i].init_hidden(batch_size, image_size))
+        return init_states
