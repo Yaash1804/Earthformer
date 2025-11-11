@@ -131,16 +131,16 @@ class ConvLSTMStudent(nn.Module):
         for i in range(self.num_layers):
             cur_input_dim = input_dim if i == 0 else hidden_dim
             self.cell_list.append(ConvLSTMCell(input_dim=cur_input_dim,
-                                               hidden_dim=self.hidden_dim,
-                                               kernel_size=kernel_size,
-                                               bias=bias))
+                                                hidden_dim=self.hidden_dim,
+                                                kernel_size=kernel_size,
+                                                bias=bias))
         
         # Final convolution layer to map hidden state to 1 output channel
         self.output_conv = nn.Conv2d(in_channels=self.hidden_dim,
-                                     out_channels=1,
-                                     kernel_size=(1, 1),
-                                     padding=0,
-                                     bias=True)
+                                       out_channels=1,
+                                       kernel_size=(1, 1),
+                                       padding=0,
+                                       bias=True)
 
     def forward(self, input_tensor, hidden_state=None):
         """
@@ -159,11 +159,13 @@ class ConvLSTMStudent(nn.Module):
         output_tensor: torch.Tensor
             Output tensor of shape (b, 1, 1, h, w)
         """
-        b, seq_len, _, h, w = input_tensor.size()
+        # --- FIX: Renamed h, w to H, W to avoid variable collision ---
+        b, seq_len, _, H, W = input_tensor.size()
         
         # Initialize hidden state if not provided
         if hidden_state is None:
-            hidden_state = self._init_hidden(batch_size=b, image_size=(h, w))
+            # --- FIX: Use H, W ---
+            hidden_state = self._init_hidden(batch_size=b, image_size=(H, W))
         
         layer_output_list = []
         last_state_list = []
@@ -171,6 +173,7 @@ class ConvLSTMStudent(nn.Module):
         cur_layer_input = input_tensor
 
         for layer_idx in range(self.num_layers):
+            # 'h' and 'c' here are TENSORS (the hidden states)
             h, c = hidden_state[layer_idx]
             output_inner = []
             
@@ -187,15 +190,17 @@ class ConvLSTMStudent(nn.Module):
             last_state_list.append([h, c])
 
         # We only care about the output of the last layer
-        # layer_output shape is (b, seq_len, hidden_dim, h, w)
+        # layer_output shape is (b, seq_len, hidden_dim, H, W)
         
         # Apply output conv to each time step
-        # (b, seq_len, hidden_dim, h, w) -> (b * seq_len, hidden_dim, h, w)
-        output = layer_output.view(b * seq_len, self.hidden_dim, h, w)
+        # (b, seq_len, hidden_dim, H, W) -> (b * seq_len, hidden_dim, H, W)
+        # --- FIX: Use H, W ---
+        output = layer_output.view(b * seq_len, self.hidden_dim, H, W)
         output = self.output_conv(output)
         
-        # (b * seq_len, 1, h, w) -> (b, seq_len, 1, h, w)
-        output = output.view(b, seq_len, 1, h, w)
+        # (b * seq_len, 1, H, W) -> (b, seq_len, 1, H, W)
+        # --- FIX: Use H, W ---
+        output = output.view(b, seq_len, 1, H, W)
 
         return output
 
