@@ -1,9 +1,7 @@
 # ==============================================================================
 # SCRIPT FOR EVALUATING THE *GENERALIZED* (TEACHER + STUDENT) MODEL
 #
-# This script loads the Teacher and the *new generalized Student*
-# (the one trained on 5 patches) and evaluates it on two new,
-# unseen test patches (P4 and P5).
+# (Version 12 - Extended to evaluate P4, P5, P6, and P7)
 #
 # ==============================================================================
 
@@ -314,7 +312,7 @@ def main():
     std_original = np.nanstd(train_data_for_stats)
     logging.info(f"Original Training Mean: {mean_original:.4f}, Original Training Std: {std_original:.4f}")
 
-    # --- 4. Define 2 New *Test* Scenarios (P4 and P5) ---
+    # --- 4. Define 4 New *Test* Scenarios (P4, P5, P6, P7) ---
     # P3 (last training patch) was lon=82.5:89.25 (Center: 85.875)
     # 50% shift = 3.375 degrees. 100% shift = 6.75 degrees.
     scenarios = [
@@ -328,9 +326,20 @@ def main():
             "center_lat": 18.125,
             "center_lon": 96.0 # 89.25 + 6.75
         },
+        # --- NEW PATCHES ADDED HERE ---
+        {
+            "name": "P6_Test_50_Overlap",
+            "center_lat": 18.125,
+            "center_lon": 99.375 # 96.0 + 3.375
+        },
+        {
+            "name": "P7_Test_0_Overlap",
+            "center_lat": 18.125,
+            "center_lon": 106.125 # 99.375 + 6.75
+        },
     ]
 
-    # --- 5. Loop through scenarios and generate 4 plots ---
+    # --- 5. Loop through scenarios and generate 8 plots ---
     for scenario in scenarios:
         run_evaluation_for_patch(
             teacher_model=teacher_model,
