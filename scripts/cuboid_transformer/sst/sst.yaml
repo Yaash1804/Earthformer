@@ -3,11 +3,11 @@
 # --- Dataset Configuration ---
 dataset:
   _target_: src.earthformer.datasets.sst.sst_datamodule.SSTDataModule
-  data_root: "/content/drive/MyDrive/sst"
+  data_root: "/content/data"
   in_len: 12
   out_len: 12
   batch_size: 2
-  num_workers: 4
+  num_workers: 2
   train_end_year: 2015
   val_end_year: 2020
 
@@ -68,7 +68,7 @@ logging:
 trainer:
   gpus: 1
   strategy: "ddp"
-  max_epochs: 100           # <-- CHANGE THIS (from 50 to 100)
+  max_epochs: 50           # <-- CHANGE THIS (from 50 to 100)
   precision: 16
   check_val_every_n_epoch: 1
   log_step_ratio: 0.01
