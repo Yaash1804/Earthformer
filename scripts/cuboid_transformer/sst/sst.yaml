@@ -4,8 +4,8 @@
 dataset:
   _target_: src.earthformer.datasets.sst.sst_datamodule.SSTDataModule
   data_root: "/content/data"
-  in_len: 12
-  out_len: 12
+  in_len: 52
+  out_len: 52
   batch_size: 2
   num_workers: 2
   train_end_year: 2015
