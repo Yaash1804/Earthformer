@@ -12,8 +12,8 @@ class SSTDataset(Dataset):
     """
     def __init__(self,
                  data: np.ndarray,
-                 in_len: int = 12,
-                 out_len: int = 12):
+                 in_len: int = 52,
+                 out_len: int = 52):
         super().__init__()
         self.data = data
         self.in_len = in_len
@@ -58,7 +58,7 @@ class SSTDataModule(pl.LightningDataModule):
         pass
 
     def setup(self, stage: str = None):
-        file_path = os.path.join(self.hparams.data_root, "sst.mon.mean.nc")
+        file_path = os.path.join(self.hparams.data_root, "sst.week.mean.nc")
         if not os.path.exists(file_path):
             raise FileNotFoundError(f"Dataset file not found at {file_path}")
         
