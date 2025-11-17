@@ -96,12 +96,19 @@ class CuboidSSTPLModule(pl.LightningModule):
         self.configure_save(cfg_file_path=oc_file)
 
     def configure_save(self, cfg_file_path=None):
-        self.save_dir = os.path.join(exps_dir, self.save_dir)
+        # --- START OF MODIFICATION ---
+        # This logic allows --save to accept an absolute path
+        if not os.path.isabs(self.save_dir):
+            # If save_dir is relative (e.g., "sst_colab_run_1"), join it with exps_dir
+            self.save_dir = os.path.join(exps_dir, self.save_dir)
+        # If save_dir is absolute (e.g., "/content/drive/..."), it will be used as-is
+        # --- END OF MODIFICATION ---
+        
         os.makedirs(self.save_dir, exist_ok=True)
         if cfg_file_path is not None:
             cfg_file_target_path = os.path.join(self.save_dir, "cfg.yaml")
             if not os.path.exists(cfg_file_target_path) or \
-               not os.path.samefile(cfg_file_path, cfg_file_target_path):
+                  not os.path.samefile(cfg_file_path, cfg_file_target_path):
                 copyfile(cfg_file_path, cfg_file_target_path)
 
     def get_base_config(self, oc_from_file=None):
