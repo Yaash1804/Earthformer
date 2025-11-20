@@ -72,6 +72,11 @@ def get_args_parser():
                         help='Path to the .yaml config file (e.g., sst.yaml).')
     parser.add_argument('--student_save_dir', type=str, default='checkpoints/student_generalized',
                         help='Directory to save the trained generalized ConvLSTM (Student) model.')
+    
+    # === MODIFICATION 1: ADD RESUME ARGUMENT ===
+    parser.add_argument('--student_resume_ckpt', type=str, default=None,
+                        help='Optional path to a previously trained Student model .pth file to resume training.')
+    # ==========================================
 
     # --- Data Path (Single .nc file) ---
     parser.add_argument('--data_path', type=str, required=True,
@@ -160,7 +165,7 @@ def load_and_prep_multi_patch_data(args, hparams):
             continue
             
         ds_patch = ds_full.isel(lat=slice(start_lat_idx, end_lat_idx), 
-                                lon=slice(start_lon_idx, end_lon_idx))
+                                 lon=slice(start_lon_idx, end_lon_idx))
         # --- End of Fix ---
         
         patch_data_raw = ds_patch['sst'].values.astype(np.float32)
@@ -191,9 +196,9 @@ def load_and_prep_multi_patch_data(args, hparams):
             all_train_y.append(train_y)
             all_val_x.append(val_x)
             all_val_y.append(val_y)
-            logging.info(f"  ...added {len(train_x)} train seqs, {len(val_x)} val seqs.")
+            logging.info(f"  ...added {len(train_x)} train seqs, {len(val_x)} val seqs.")
         else:
-            logging.warning(f"  ...could not create sequences for {scenario['name']}.")
+            logging.warning(f"  ...could not create sequences for {scenario['name']}.")
 
     # --- 6. Concatenate all sequences into giant datasets ---
     logging.info("Concatenating all patch data...")
@@ -218,7 +223,6 @@ def load_and_prep_multi_patch_data(args, hparams):
     return train_loader, val_loader
 
 # --- train_one_epoch and validate_one_epoch are UNCHANGED ---
-# They are identical to train_student.py
 
 def train_one_epoch(teacher_model, student_model, dataloader, optimizer, criterion, device):
     """Runs a single training epoch based on your specified logic."""
@@ -317,7 +321,6 @@ def main(args):
         exit(1)
         
     # --- 2. Setup Data ---
-    # This function now does all the multi-patch loading and combining
     train_loader, val_loader = load_and_prep_multi_patch_data(args, hparams)
     
     logging.info(f"Combined DataLoaders created. Train batches: {len(train_loader)}, Val batches: {len(val_loader)}")
@@ -333,6 +336,17 @@ def main(args):
         num_layers=2
     ).to(device)
     logging.info("ConvLSTM Student model initialized.")
+    
+    # === MODIFICATION 2: IMPLEMENT CHECKPOINT LOADING LOGIC ===
+    if args.student_resume_ckpt:
+        try:
+            logging.info(f"Attempting to resume Student training from: {args.student_resume_ckpt}")
+            student_model.load_state_dict(torch.load(args.student_resume_ckpt, map_location=device))
+            logging.info("Student model state loaded successfully for resume.")
+        except Exception as e:
+            logging.error(f"Error loading student checkpoint for resume: {e}")
+            sys.exit(1)
+    # ==========================================================
 
     # --- 4. Setup Optimizer and Criterion ---
     optimizer = optim.Adam(student_model.parameters(), lr=args.lr)
